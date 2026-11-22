@@ -1,0 +1,300 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      html, body {
+        margin: 0;
+        padding: 0;
+        overflow: hidden;
+      }
+
+      #frame {
+        box-sizing: border-box;
+        width: 100%;
+        padding: 48px;
+      }
+
+      #image-container {
+        position: relative;
+        display: inline-block;
+        max-width: 100%;
+        vertical-align: top;
+      }
+
+      img {
+        display: block;
+        max-width: 100%;
+        height: auto;
+        cursor: crosshair;
+      }
+
+      #markers {
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+      }
+
+      .reference-marker {
+        position: absolute;
+        padding: 0;
+        border: 0;
+        background: transparent;
+        color: white;
+        cursor: grab;
+        touch-action: none;
+        pointer-events: auto;
+      }
+
+      .reference-marker.x-axis {
+        width: 36px;
+        height: 44px;
+        transform: translate(-50%, 0);
+      }
+
+      .reference-marker.y-axis {
+        width: 44px;
+        height: 36px;
+        transform: translate(-100%, -50%);
+      }
+
+      .reference-marker::before {
+        content: "";
+        padding: 0;
+        position: absolute;
+        filter: drop-shadow(0 1px 2px #000);
+      }
+
+      .reference-marker.x-axis::before {
+        top: 0;
+        left: 50%;
+        transform: translateX(-50%);
+        border-right: 9px solid transparent;
+        border-bottom: 12px solid var(--marker-color);
+        border-left: 9px solid transparent;
+      }
+
+      .reference-marker.y-axis::before {
+        top: 50%;
+        right: 0;
+        transform: translateY(-50%);
+        border-top: 9px solid transparent;
+        border-bottom: 9px solid transparent;
+        border-left: 12px solid var(--marker-color);
+      }
+
+      .marker-head {
+        position: absolute;
+        display: grid;
+        place-items: center;
+        width: 30px;
+        height: 30px;
+        border: 2px solid white;
+        border-radius: 50%;
+        background: var(--marker-color);
+        font: 700 11px/1 sans-serif;
+        text-shadow: 0 1px 2px #000;
+        box-shadow: 0 1px 5px #000;
+      }
+
+      .x-axis .marker-head {
+        top: 8px;
+        left: 50%;
+        transform: translateX(-50%);
+      }
+
+      .y-axis .marker-head {
+        top: 50%;
+        left: 8px;
+        transform: translateY(-50%);
+      }
+
+      .reference-marker.dragging {
+        cursor: grabbing;
+        z-index: 1;
+      }
+
+      .reference-marker.dragging .marker-head {
+        box-shadow: 0 1px 8px #000;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="frame">
+      <div id="image-container">
+        <img id="graph-image" alt="Graph to digitize" />
+        <div id="markers" aria-label="Draggable calibration reference points"></div>
+      </div>
+    </div>
+    <script>
+      const image = document.getElementById("graph-image");
+      const frame = document.getElementById("frame");
+      const markerLayer = document.getElementById("markers");
+      const markerLabels = {
+        x_start: "X1",
+        x_end: "X2",
+        y_start: "Y1",
+        y_end: "Y2",
+      };
+      const markerColors = {
+        x_start: "#d62728",
+        x_end: "#ff7f0e",
+        y_start: "#1f77b4",
+        y_end: "#2ca02c",
+      };
+      let clickSequence = 0;
+      let calibrationPoints = {};
+      let activeDrag = null;
+
+      function sendMessage(type, data = {}) {
+        window.parent.postMessage(
+          { isStreamlitMessage: true, type, ...data },
+          "*"
+        );
+      }
+
+      function updateFrameHeight() {
+        sendMessage("streamlit:setFrameHeight", {
+          height: Math.ceil(frame.getBoundingClientRect().height),
+        });
+      }
+
+      function sendValue(value) {
+        sendMessage("streamlit:setComponentValue", {
+          value,
+          dataType: "json",
+        });
+      }
+
+      function imagePoint(clientX, clientY) {
+        const bounds = image.getBoundingClientRect();
+        const x = Math.max(0, Math.min(clientX - bounds.left, bounds.width - 1));
+        const y = Math.max(0, Math.min(clientY - bounds.top, bounds.height - 1));
+        return {
+          x: Math.round((x / bounds.width) * image.naturalWidth),
+          y: Math.round((y / bounds.height) * image.naturalHeight),
+        };
+      }
+
+      function positionMarker(marker, point) {
+        marker.style.left = `${(point.x / image.naturalWidth) * 100}%`;
+        marker.style.top = `${(point.y / image.naturalHeight) * 100}%`;
+      }
+
+      function renderMarkers() {
+        markerLayer.replaceChildren();
+        if (!image.naturalWidth || !image.naturalHeight) {
+          return;
+        }
+
+        Object.entries(markerLabels).forEach(([role, label]) => {
+          const point = calibrationPoints[role];
+          if (!point) {
+            return;
+          }
+
+          const marker = document.createElement("button");
+          marker.type = "button";
+          const axis = role.startsWith("x_") ? "x-axis" : "y-axis";
+          marker.className = `reference-marker ${axis}`;
+          marker.title = `Drag ${label}; its tip shows the exact calibration point`;
+          marker.setAttribute("aria-label", marker.title);
+          marker.style.setProperty("--marker-color", markerColors[role]);
+          positionMarker(marker, { x: point[0], y: point[1] });
+          const head = document.createElement("span");
+          head.className = "marker-head";
+          head.textContent = label;
+          marker.appendChild(head);
+
+          marker.addEventListener("pointerdown", (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            marker.setPointerCapture(event.pointerId);
+            activeDrag = {
+              marker,
+              role,
+              pointerId: event.pointerId,
+              startX: event.clientX,
+              startY: event.clientY,
+              moved: false,
+            };
+            marker.classList.add("dragging");
+          });
+          marker.addEventListener("pointermove", (event) => {
+            if (activeDrag && activeDrag.pointerId === event.pointerId) {
+              if (
+                !activeDrag.moved &&
+                Math.hypot(
+                  event.clientX - activeDrag.startX,
+                  event.clientY - activeDrag.startY
+                ) < 2
+              ) {
+                return;
+              }
+              activeDrag.moved = true;
+              positionMarker(marker, imagePoint(event.clientX, event.clientY));
+            }
+          });
+          marker.addEventListener("pointerup", (event) => {
+            if (!activeDrag || activeDrag.pointerId !== event.pointerId) {
+              return;
+            }
+
+            if (!activeDrag.moved) {
+              marker.classList.remove("dragging");
+              activeDrag = null;
+              return;
+            }
+
+            const point = imagePoint(event.clientX, event.clientY);
+            marker.classList.remove("dragging");
+            activeDrag = null;
+            sendValue({
+              type: "reference",
+              role,
+              ...point,
+              id: `${Date.now()}-${++clickSequence}`,
+            });
+          });
+          marker.addEventListener("pointercancel", () => {
+            if (activeDrag && activeDrag.marker === marker) {
+              marker.classList.remove("dragging");
+              activeDrag = null;
+              renderMarkers();
+            }
+          });
+          markerLayer.appendChild(marker);
+        });
+      }
+
+      window.addEventListener("message", (event) => {
+        if (event.source !== window.parent || event.data.type !== "streamlit:render") {
+          return;
+        }
+
+        const { src, calibration_points: points } = event.data.args;
+        calibrationPoints = points || {};
+        if (image.src !== src) {
+          image.src = src;
+        } else {
+          renderMarkers();
+        }
+      });
+
+      image.addEventListener("load", () => {
+        renderMarkers();
+        updateFrameHeight();
+      });
+      window.addEventListener("resize", updateFrameHeight);
+      image.addEventListener("click", (event) => {
+        sendValue({
+          type: "image",
+          ...imagePoint(event.clientX, event.clientY),
+          id: `${Date.now()}-${++clickSequence}`,
+        });
+      });
+
+      sendMessage("streamlit:componentReady", { apiVersion: 1 });
+    </script>
+  </body>
+</html>
