@@ -105,7 +105,7 @@
 
       .y-axis .marker-head {
         top: 50%;
-        left: 8px;
+        left: 0;
         transform: translateY(-50%);
       }
 
@@ -176,6 +176,20 @@
         };
       }
 
+      function draggedPoint(clientX, clientY) {
+        const pointer = imagePoint(clientX, clientY);
+        return {
+          x: Math.max(
+            0,
+            Math.min(pointer.x + activeDrag.offsetX, image.naturalWidth - 1)
+          ),
+          y: Math.max(
+            0,
+            Math.min(pointer.y + activeDrag.offsetY, image.naturalHeight - 1)
+          ),
+        };
+      }
+
       function positionMarker(marker, point) {
         marker.style.left = `${(point.x / image.naturalWidth) * 100}%`;
         marker.style.top = `${(point.y / image.naturalHeight) * 100}%`;
@@ -210,12 +224,15 @@
             event.preventDefault();
             event.stopPropagation();
             marker.setPointerCapture(event.pointerId);
+            const pointer = imagePoint(event.clientX, event.clientY);
             activeDrag = {
               marker,
               role,
               pointerId: event.pointerId,
               startX: event.clientX,
               startY: event.clientY,
+              offsetX: point[0] - pointer.x,
+              offsetY: point[1] - pointer.y,
               moved: false,
             };
             marker.classList.add("dragging");
@@ -232,7 +249,7 @@
                 return;
               }
               activeDrag.moved = true;
-              positionMarker(marker, imagePoint(event.clientX, event.clientY));
+              positionMarker(marker, draggedPoint(event.clientX, event.clientY));
             }
           });
           marker.addEventListener("pointerup", (event) => {
@@ -246,7 +263,7 @@
               return;
             }
 
-            const point = imagePoint(event.clientX, event.clientY);
+            const point = draggedPoint(event.clientX, event.clientY);
             marker.classList.remove("dragging");
             activeDrag = null;
             sendValue({
