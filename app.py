@@ -1,5 +1,4 @@
 import base64
-import csv
 import hashlib
 import io
 from pathlib import Path
@@ -9,6 +8,7 @@ import streamlit.components.v1 as components
 from PIL import Image, UnidentifiedImageError
 
 from calibration import AxisCalibration, default_calibration_points, pixel_to_data
+from data_export import build_csv
 
 
 image_click_component = components.declare_component(
@@ -56,6 +56,28 @@ if image_file is not None:
         ).items():
             calibration_points.setdefault(role, point)
 
+        input_generation = st.session_state.image_click_generation
+        st.subheader("Name the data set and axes")
+        dataset_name_column, x_name_column, y_name_column = st.columns(3)
+        with dataset_name_column:
+            dataset_name = st.text_input(
+                "Data set name",
+                value=Path(image_file.name).stem,
+                key=f"dataset-name-{input_generation}",
+            )
+        with x_name_column:
+            x_axis_name = st.text_input(
+                "X-axis name",
+                value="X",
+                key=f"x-axis-name-{input_generation}",
+            )
+        with y_name_column:
+            y_axis_name = st.text_input(
+                "Y-axis name",
+                value="Y",
+                key=f"y-axis-name-{input_generation}",
+            )
+
         st.subheader("1. Calibrate axes")
         st.write(
             "The four markers start near the image corners. Drag them onto "
@@ -64,10 +86,15 @@ if image_file is not None:
             "points. A marker's tip shows its exact location while dragging; "
             "x-axis tips face up and y-axis tips face right."
         )
-        input_generation = st.session_state.image_click_generation
         x_column, y_column = st.columns(2)
         with x_column:
             st.markdown("**X-axis references**")
+            x_scale = st.selectbox(
+                "X-axis scale",
+                options=["linear", "logarithmic"],
+                format_func=lambda scale: scale.capitalize(),
+                key=f"x-scale-{input_generation}",
+            )
             x_start_value = st.number_input(
                 "X value at the first point",
                 value=None,
@@ -82,6 +109,12 @@ if image_file is not None:
             )
         with y_column:
             st.markdown("**Y-axis references**")
+            y_scale = st.selectbox(
+                "Y-axis scale",
+                options=["linear", "logarithmic"],
+                format_func=lambda scale: scale.capitalize(),
+                key=f"y-scale-{input_generation}",
+            )
             y_start_value = st.number_input(
                 "Y value at the first point",
                 value=None,
@@ -134,12 +167,14 @@ if image_file is not None:
                         value_start=x_start_value,
                         pixel_end=calibration_points["x_end"],
                         value_end=x_end_value,
+                        scale=x_scale,
                     ),
                     "y_axis": AxisCalibration(
                         pixel_start=calibration_points["y_start"],
                         value_start=y_start_value,
                         pixel_end=calibration_points["y_end"],
                         value_end=y_end_value,
+                        scale=y_scale,
                     ),
                 }
                 pixel_to_data(
@@ -162,8 +197,8 @@ if image_file is not None:
         elif calibration is not None:
             st.success(
                 "Axes calibrated. Click the image to add points. "
-                f"X: {x_start_value:g} to {x_end_value:g}; "
-                f"Y: {y_start_value:g} to {y_end_value:g}."
+                f"X: {x_start_value:g} to {x_end_value:g} ({x_scale}); "
+                f"Y: {y_start_value:g} to {y_end_value:g} ({y_scale})."
             )
         elif has_all_references:
             st.info("Enter all four known values to finish calibration.")
@@ -176,6 +211,9 @@ if image_file is not None:
         click = image_click_component(
             src=image_source,
             calibration_points=calibration_points,
+            dataset_name=dataset_name,
+            x_axis_name=x_axis_name,
+            y_axis_name=y_axis_name,
             key=f"graph-image-{st.session_state.image_click_generation}",
             default=None,
             height=650,
@@ -224,23 +262,44 @@ if image_file is not None:
 
         data_points = st.session_state.data_points
         if data_points:
+            reserved_column_names = {"Point", "Pixel X", "Pixel Y"}
+            axis_names_valid = (
+                bool(x_axis_name.strip())
+                and bool(y_axis_name.strip())
+                and x_axis_name.strip() != y_axis_name.strip()
+                and x_axis_name.strip() not in reserved_column_names
+                and y_axis_name.strip() not in reserved_column_names
+            )
+            if not axis_names_valid:
+                st.error(
+                    "Choose distinct, non-empty axis names that are not "
+                    "Point, Pixel X, or Pixel Y."
+                )
+            dataset_name_valid = bool(dataset_name.strip())
+            if not dataset_name_valid:
+                st.error("Enter a data set name before downloading the CSV.")
+
             displayed_points = []
             for index, point in enumerate(data_points, start=1):
                 row = {"Point": index}
                 if calibration is not None:
-                    row["X"], row["Y"] = pixel_to_data(
+                    (
+                        row[x_axis_name.strip()],
+                        row[y_axis_name.strip()],
+                    ) = pixel_to_data(
                         calibration["x_axis"],
                         calibration["y_axis"],
                         (point["Pixel X"], point["Pixel Y"]),
                     )
                 else:
-                    row["X"] = None
-                    row["Y"] = None
+                    row[x_axis_name.strip()] = None
+                    row[y_axis_name.strip()] = None
                 row["Pixel X"] = point["Pixel X"]
                 row["Pixel Y"] = point["Pixel Y"]
                 displayed_points.append(row)
 
-            st.dataframe(displayed_points, hide_index=True, width="stretch")
+            if axis_names_valid:
+                st.dataframe(displayed_points, hide_index=True, width="stretch")
             point_to_remove = st.selectbox(
                 "Point to remove",
                 options=range(1, len(data_points) + 1),
@@ -252,18 +311,16 @@ if image_file is not None:
                 st.rerun()
 
             if calibration is not None:
-                csv_buffer = io.StringIO()
-                writer = csv.DictWriter(
-                    csv_buffer,
-                    fieldnames=displayed_points[0].keys(),
-                )
-                writer.writeheader()
-                writer.writerows(displayed_points)
                 st.download_button(
                     "Download points as CSV",
-                    data=csv_buffer.getvalue(),
+                    data=build_csv(
+                        dataset_name.strip(),
+                        list(displayed_points[0].keys()),
+                        displayed_points,
+                    ),
                     file_name="digitized-points.csv",
                     mime="text/csv",
+                    disabled=not axis_names_valid or not dataset_name_valid,
                 )
         elif calibration is not None:
             st.caption("No data points selected yet.")

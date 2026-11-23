@@ -5,19 +5,24 @@ Project for NE 111 @uwaterloo
 
 The app extracts data points from a graph image in two steps:
 
-1. Upload an image. Four labeled calibration markers appear near the image
+1. Name the data set and axes, then upload an image. The data set name appears
+   above the image, the y-axis name to its left, and the x-axis name beneath
+   it. Four labeled calibration markers appear near the image
    corners: the first x/y references start at the lower-left, the second x
    reference at the lower-right, and the second y reference at the upper-left.
    Drag them onto the graph's known axis points. A marker's tip shows its exact
    location as you drag; x-axis tips face up, and y-axis tips face right. Enter
-   the corresponding known values (they do not need to start at zero). Values
+   the corresponding known values (they do not need to start at zero) and
+   choose linear or logarithmic scale independently for each axis. Values
    remain editable during extraction, and changing one recalibrates all
    extracted points. Alternatively, choose a reference under **Reference
    point to reposition** and click its corrected location. Choose **Do not
    reposition a reference** to resume adding data points.
 2. Click the graph's data points to convert them to x/y values. The extracted
    points appear in a table and can be downloaded as a CSV file. Select a point
-   below the table and choose **Remove selected point** to remove it.
+   below the table and choose **Remove selected point** to remove it. The CSV's
+   first row contains the data set name, and its second row contains column
+   headers using the names given to the axes.
 
 ### Run the app on Windows
 

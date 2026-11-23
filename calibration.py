@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import math
 from typing import Tuple
 
 
@@ -29,6 +30,7 @@ class AxisCalibration:
     value_start: float
     pixel_end: Point
     value_end: float
+    scale: str = "linear"
 
     def pixel_span(self) -> Point:
         return (
@@ -37,16 +39,36 @@ class AxisCalibration:
         )
 
     def value_span(self) -> float:
-        span = self.value_end - self.value_start
+        if self.scale not in ("linear", "logarithmic"):
+            raise ValueError("axis scale must be linear or logarithmic")
+        if self.scale == "logarithmic":
+            if self.value_start <= 0 or self.value_end <= 0:
+                raise ValueError(
+                    "logarithmic axes require both known values to be greater than zero"
+                )
+            start = math.log(self.value_start)
+            end = math.log(self.value_end)
+        else:
+            start = self.value_start
+            end = self.value_end
+        span = end - start
         if span == 0:
             raise ValueError("the two known values on each axis must be different")
         return span
 
     def pixel_origin(self, pixel_span: Point, value_span: float) -> Point:
-        return (
-            self.pixel_start[0] - pixel_span[0] * self.value_start / value_span,
-            self.pixel_start[1] - pixel_span[1] * self.value_start / value_span,
+        value_start = (
+            math.log(self.value_start)
+            if self.scale == "logarithmic"
+            else self.value_start
         )
+        return (
+            self.pixel_start[0] - pixel_span[0] * value_start / value_span,
+            self.pixel_start[1] - pixel_span[1] * value_start / value_span,
+        )
+
+    def inverse_value(self, value: float) -> float:
+        return math.exp(value) if self.scale == "logarithmic" else value
 
 
 def pixel_to_data(
@@ -80,4 +102,7 @@ def pixel_to_data(
         * y_value_span
         / pixel_determinant
     )
-    return x_coordinate, y_coordinate
+    return (
+        x_axis.inverse_value(x_coordinate),
+        y_axis.inverse_value(y_coordinate),
+    )

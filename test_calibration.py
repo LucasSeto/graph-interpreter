@@ -100,3 +100,30 @@ class PixelToDataTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "must not be parallel"):
             pixel_to_data(x_axis, y_axis, (0, 0))
+
+    def test_converts_logarithmic_x_axis(self):
+        x, y = pixel_to_data(
+            x_axis=AxisCalibration((100, 200), 2, (300, 200), 8, "logarithmic"),
+            y_axis=AxisCalibration((100, 200), 1, (100, 100), 5, "linear"),
+            pixel=(200, 150),
+        )
+
+        self.assertAlmostEqual(x, 4)
+        self.assertAlmostEqual(y, 3)
+
+    def test_converts_logarithmic_y_axis(self):
+        x, y = pixel_to_data(
+            x_axis=AxisCalibration((100, 200), 0, (300, 200), 10, "linear"),
+            y_axis=AxisCalibration((100, 200), 1, (100, 100), 100, "logarithmic"),
+            pixel=(200, 150),
+        )
+
+        self.assertAlmostEqual(x, 5)
+        self.assertAlmostEqual(y, 10)
+
+    def test_rejects_non_positive_logarithmic_values(self):
+        x_axis = AxisCalibration((0, 0), 0, (1, 0), 10, "logarithmic")
+        y_axis = AxisCalibration((0, 0), 1, (0, 1), 10, "linear")
+
+        with self.assertRaisesRegex(ValueError, "greater than zero"):
+            pixel_to_data(x_axis, y_axis, (0, 0))
