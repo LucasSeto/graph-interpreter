@@ -5,7 +5,7 @@ Project for NE 111 @uwaterloo
 
 The app extracts data points from a graph image in two steps:
 
-1. Name the data set and axes, then upload an image. The data set name appears
+1. Upload an image and name the data set and axes. The data set name appears
    above the image, the y-axis name to its left, and the x-axis name beneath
    it. Four labeled calibration markers appear near the image
    corners: the first x/y references start at the lower-left, the second x
@@ -23,6 +23,17 @@ The app extracts data points from a graph image in two steps:
    below the table and choose **Remove selected point** to remove it. The CSV's
    first row contains the data set name, and its second row contains column
    headers using the names given to the axes.
+3. After calibration, choose **Detect colored data sets** to identify colored
+   lines or scatter series in the calibrated plot area. Review the marked
+   trace pixels, rename or exclude detected series, and export the selected
+   series together. Legend text is recognized locally when Tesseract is
+   installed; otherwise, enter the series names yourself. Detection separates
+   visibly distinct colors; grayscale traces and same-colored overlapping
+   series still need the existing click-to-add workflow. Download each
+   selected series as its own CSV (series name, two axis headers, and two
+   columns of points), or export selected series together. For best results,
+   place X1 and X2 at the lower-left and lower-right plot edges and Y1 and Y2
+   at the lower-left and upper-left plot edges.
 
 ### Run the app on Windows
 
@@ -32,6 +43,16 @@ can install Python 3.12 with:
 ```powershell
 winget install --id Python.Python.3.12 -e
 ```
+
+Install the local OCR engine to recognize legend labels:
+
+```powershell
+winget install --id UB-Mannheim.TesseractOCR -e
+```
+
+Close and reopen PowerShell after installation so the Tesseract executable is
+available on `PATH`. Legend recognition is optional; series detection and
+manual series naming work without it.
 
 If you install Python this way, close and reopen PowerShell afterward. Then
 open PowerShell in this project folder (the folder containing `app.py`) and

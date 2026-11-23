@@ -5,10 +5,12 @@ from pathlib import Path
 
 import streamlit as st
 import streamlit.components.v1 as components
-from PIL import Image, UnidentifiedImageError
+import pytesseract
+from PIL import Image, ImageDraw, UnidentifiedImageError
 
 from calibration import AxisCalibration, default_calibration_points, pixel_to_data
-from data_export import build_csv
+from data_export import build_csv, build_series_csv, build_single_series_csv
+from series_detection import detect_color_series, read_legend_names
 
 
 image_click_component = components.declare_component(
@@ -34,10 +36,19 @@ if image_file is not None:
         st.session_state.image_id = image_id
         st.session_state.calibration_points = {}
         st.session_state.data_points = []
+        st.session_state.detected_series = []
+        st.session_state.series_detection_signature = None
+        st.session_state.series_detection_generation = 0
+        st.session_state.legend_ocr_available = None
         st.session_state.last_click_event_id = None
         st.session_state.image_click_generation = (
             st.session_state.get("image_click_generation", 0) + 1
         )
+
+    st.session_state.setdefault("detected_series", [])
+    st.session_state.setdefault("series_detection_signature", None)
+    st.session_state.setdefault("series_detection_generation", 0)
+    st.session_state.setdefault("legend_ocr_available", None)
 
     try:
         with Image.open(io.BytesIO(image_bytes)) as source_image:
@@ -324,6 +335,196 @@ if image_file is not None:
                 )
         elif calibration is not None:
             st.caption("No data points selected yet.")
+
+        if calibration is not None:
+            st.subheader("3. Detect colored data sets")
+            st.write(
+                "Detect differently colored lines or scatter series inside "
+                "the calibrated plot area. For best results, place the x-axis "
+                "references at the lower-left and lower-right plot edges and "
+                "the y-axis references at the lower-left and upper-left edges. "
+                "Review the detected traces, rename or exclude them, then "
+                "export the selected series together."
+            )
+            marker_signature = tuple(
+                (role, tuple(calibration_points[role]))
+                for role in ("x_start", "x_end", "y_start", "y_end")
+            )
+            if st.button(
+                "Detect colored data sets",
+                key=f"detect-series-{input_generation}",
+            ):
+                try:
+                    candidates = detect_color_series(image, calibration_points)
+                except ValueError as error:
+                    st.error(f"Could not detect data sets: {error}")
+                else:
+                    try:
+                        legend_names, ocr_available = read_legend_names(
+                            image, candidates
+                        )
+                    except pytesseract.TesseractError as error:
+                        st.error(f"Could not read the graph legend: {error}")
+                        legend_names = {}
+                        ocr_available = True
+
+                    st.session_state.detected_series = [
+                        {
+                            "color": candidate.color,
+                            "name": legend_names.get(
+                                index, f"Series {index + 1}"
+                            ),
+                            "points": [
+                                {"Pixel X": x, "Pixel Y": y}
+                                for x, y in candidate.points
+                            ],
+                        }
+                        for index, candidate in enumerate(candidates)
+                    ]
+                    st.session_state.series_detection_signature = marker_signature
+                    st.session_state.series_detection_generation += 1
+                    st.session_state.legend_ocr_available = ocr_available
+
+            detected_series = st.session_state.get("detected_series", [])
+            if (
+                detected_series
+                and st.session_state.get("series_detection_signature")
+                != marker_signature
+            ):
+                st.warning(
+                    "Calibration markers changed since detection. Detect the "
+                    "series again to match the current plot area."
+                )
+            elif not detected_series and st.session_state.get(
+                "series_detection_signature"
+            ) == marker_signature:
+                st.warning(
+                    "No distinct colored traces were found. Check the "
+                    "calibration markers or continue with click-to-add points."
+                )
+            elif detected_series:
+                detection_generation = st.session_state.series_detection_generation
+                series_for_export = []
+                overlay = image.copy()
+                overlay_draw = ImageDraw.Draw(overlay)
+                invalid_names = False
+                dataset_names_valid = (
+                    bool(x_axis_name.strip())
+                    and bool(y_axis_name.strip())
+                    and x_axis_name.strip() != y_axis_name.strip()
+                )
+                if not dataset_names_valid:
+                    st.error("Enter distinct, non-empty names for both axes.")
+                if not dataset_name.strip():
+                    st.error("Enter a data set name before downloading the CSV.")
+
+                for index, series in enumerate(detected_series):
+                    series_column, name_column = st.columns([1, 3])
+                    with series_column:
+                        included = st.checkbox(
+                            f"Include {series['name']} ({series['color']})",
+                            value=True,
+                            key=(
+                                f"include-series-{input_generation}-"
+                                f"{detection_generation}-{index}"
+                            ),
+                        )
+                    with name_column:
+                        name = st.text_input(
+                            f"Data set {index + 1} name",
+                            value=series["name"],
+                            key=(
+                                f"name-series-{input_generation}-"
+                                f"{detection_generation}-{index}"
+                            ),
+                        ).strip()
+
+                    pixel_points = series["points"]
+                    step = max(1, len(pixel_points) // 1500)
+                    for point in pixel_points[::step]:
+                        x = round(point["Pixel X"])
+                        y = round(point["Pixel Y"])
+                        overlay_draw.ellipse(
+                            (x - 2, y - 2, x + 2, y + 2),
+                            fill=series["color"],
+                            outline="white",
+                        )
+
+                    if included:
+                        if not name:
+                            invalid_names = True
+                        data = [
+                            {
+                                "x": values[0],
+                                "y": values[1],
+                            }
+                            for values in (
+                                pixel_to_data(
+                                    calibration["x_axis"],
+                                    calibration["y_axis"],
+                                    (point["Pixel X"], point["Pixel Y"]),
+                                )
+                                for point in pixel_points
+                            )
+                        ]
+                        data.sort(key=lambda point: point["x"])
+                        series_for_export.append(
+                            {"name": name, "points": data}
+                        )
+
+                with st.expander("Review detected traces"):
+                    st.image(
+                        overlay,
+                        caption="Colored markers show the detected trace pixels.",
+                        width="stretch",
+                    )
+
+                if st.session_state.legend_ocr_available is False:
+                    st.info(
+                        "Legend text recognition is unavailable. Install "
+                        "Tesseract using the README instructions, or rename "
+                        "the detected series here."
+                    )
+                if invalid_names:
+                    st.error("Give every detected series a non-empty name.")
+                export_names = [item["name"].casefold() for item in series_for_export]
+                names_valid = len(export_names) == len(set(export_names))
+                if series_for_export and not names_valid:
+                    st.error("Included series must have unique names.")
+                if (
+                    series_for_export
+                    and names_valid
+                    and not invalid_names
+                    and dataset_names_valid
+                ):
+                    for index, series in enumerate(series_for_export, start=1):
+                        st.download_button(
+                            f"Download {series['name']} as CSV",
+                            data=build_single_series_csv(
+                                series["name"],
+                                x_axis_name.strip(),
+                                y_axis_name.strip(),
+                                series["points"],
+                            ),
+                            file_name=f"data-set-{index}.csv",
+                            mime="text/csv",
+                            key=(
+                                f"download-single-series-{input_generation}-"
+                                f"{detection_generation}-{index}"
+                            ),
+                        )
+                    st.download_button(
+                        "Download selected data sets as CSV",
+                        data=build_series_csv(
+                            dataset_name.strip(),
+                            x_axis_name.strip(),
+                            y_axis_name.strip(),
+                            series_for_export,
+                        ),
+                        file_name="digitized-series.csv",
+                        mime="text/csv",
+                        disabled=not dataset_name.strip(),
+                    )
 
 else:
     st.info("Upload a graph image to get started.")
